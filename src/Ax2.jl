@@ -10,12 +10,14 @@ fs_play = 48_000
 
 load_recording(wavfile) = wavread(wavfile)
 
-Ys_cache = LRU{Tuple{Int,Int,Int},DSP.Periodograms.Spectrogram}(maxsize=10)
+Ys_cache = LRU{Tuple{UInt64,Int,Int,Int},DSP.Periodograms.Spectrogram}(maxsize=10)
 
 function calculate_hanning_spectrograms(y, nffts, noverlaps, offset, fs)
     Ys = Vector{DSP.Periodograms.Spectrogram}(undef, length(nffts))
     Threads.@threads :greedy for (i,(nfft,noverlap)) in enumerate(zip(nffts,noverlaps))
-        Ys[i] = get!(()->spectrogram.(Ref(y[1+offset:end,1]), nfft, noverlap; fs=fs, window=hanning), Ys_cache, (nfft,offset,noverlap))
+        Ys[i] = get!(Ys_cache, (hash(y[1+offset:end,1]), nfft,offset,noverlap)) do
+            spectrogram.(Ref(y[1+offset:end,1]), nfft, noverlap; fs=fs, window=hanning)
+        end
     end
     return Ys
 end
