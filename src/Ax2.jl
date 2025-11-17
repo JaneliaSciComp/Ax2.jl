@@ -1,6 +1,6 @@
 module Ax2
 
-using WAV, DSP, LRUCache, ProgressMeter, Colors, Statistics, ImageCore, ImageMorphology, ImageFiltering, DelimitedFiles, HDF5
+using WAV, DSP, LRUCache, Colors, Statistics, ImageCore, ImageMorphology, ImageFiltering, DelimitedFiles, HDF5
 
 export load_recording, calculate_hanning_spectrograms, dB, overlay, precompute_configs, calculate_multitaper_spectrograms, coalesce_multitaper_power, coalesce_multitaper_ftest, make_strel, refine_ftest, scale_and_color, cumpower, play, get_components, save_csv, save_hdf
 export freq, time, Periodograms
@@ -76,18 +76,15 @@ function calculate_multitaper_spectrograms(y, nffts, noverlaps, nw, k, fs, iclip
         i_idxs = Channel() do chnl
             foreach(i_idx->put!(chnl,i_idx), enumerate(idxs))
         end
-        p = Progress(length(idxs), output=output)
         @sync for _ in 1:Threads.nthreads()
             Threads.@spawn begin
                 config = take!(configs[nfft])
                 for (i,idx) in i_idxs
                     mtspectrum[i] = _mt_pgram(idx, nfft, config)
-                    next!(p)
                 end
                 put!(configs[nfft], config)
             end
         end
-        finish!(p)
         push!(mtspectrums, mtspectrum)
     end
     return mtspectrums
