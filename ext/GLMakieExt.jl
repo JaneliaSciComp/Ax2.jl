@@ -302,9 +302,9 @@ function init()
     end
 
     # indices into Y
-    ifreq = lift(isl_freq.interval, Y_freq) do x, Y_freq
-        start = 1 + round(Int, (length(Y_freq)-1) * x[1])
-        stop = 1 + round(Int, (length(Y_freq)-1) * x[2])
+    ifreq = @lift begin
+        start = 1 + round(Int, (length($Y_freq)-1) * $(isl_freq.interval)[1])
+        stop = 1 + round(Int, (length($Y_freq)-1) * $(isl_freq.interval)[2])
         step = max(1, fld(stop-start+1, display_size[2]))
         start:step:stop
     end
@@ -453,6 +453,27 @@ function init()
     ax3.ylabel[] = "power"
     onany((cp,Yt,i)->limits!(ax3, Yt[i[1]], Yt[i[end]], extrema(cp)...),
           cumpowers2, Y_time, itime)
+
+    y.ignore_equal_values = true
+    Ys.ignore_equal_values = true
+    nffts.ignore_equal_values = true
+    noverlaps.ignore_equal_values = true
+    offset.ignore_equal_values = true
+    nw.ignore_equal_values = true
+    k.ignore_equal_values = true
+    fs.ignore_equal_values = true
+    iclip.ignore_equal_values = true
+    powers.ignore_equal_values = true
+    itime.ignore_equal_values = true
+    ifreq.ignore_equal_values = true
+    Y_freq.ignore_equal_values = true
+    Y_time.ignore_equal_values = true
+    coarse2fine.ignore_equal_values = true
+    Y.ignore_equal_values = true
+    Y_MT.ignore_equal_values = true
+    Y_MTs.ignore_equal_values = true
+    mtspectrums.ignore_equal_values = true
+    Fs.ignore_equal_values = true
 
     colsize!(fig.layout, 2, Auto(8))
     colsize!(fig.layout, 3, Auto(1))
