@@ -29,7 +29,7 @@ function overlay(Ys)
     mintime = minimum(round.(Int, maximum(ntime) ./ ntime) .* ntime)
     minfreq = minimum(round.(Int, maximum(nfreq) ./ nfreq) .* nfreq)
     Y_overlay = zeros(Float32, 4, minfreq, mintime)
-    for (icolor, Yi) in enumerate(Ys)
+    Threads.@threads :greedy for (icolor, Yi) in enumerate(Ys)
         sz = size(Yi)
         scale = round.(Int, (minfreq, mintime) ./ sz)
         for f0 in 1:scale[1]
