@@ -165,7 +165,7 @@ function init()
     minpix2 = @lift parse(Int, $(tb_minpix2.stored_string))
 
     Ys = @lift calculate_hanning_spectrograms($y, $nffts, $noverlaps, $offset, $fs)
-    Y = @lift overlay($Ys, dB)
+    Y = @lift overlay($Ys)
 
     Y_freq = @lift freq($Ys[argmax($nffts)])
     Y_time = @lift time($Ys[argmin($nffts)])
@@ -338,7 +338,7 @@ function init()
             fill(Periodograms.Spectrogram(Matrix{Float64}(undef, 0, 0), 0:0., 0:0.), 0)
         end
     end
-    Y_MT = @lift $(to_window.active) ? Array{Float32}(undef, 0, 0, 0) : overlay($Y_MTs, dB)
+    Y_MT = @lift $(to_window.active) ? Array{Float32}(undef, 0, 0, 0) : overlay($Y_MTs)
 
     Fs = @lift begin
         if $(cb_ftest.checked)

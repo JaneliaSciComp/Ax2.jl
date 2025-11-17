@@ -22,9 +22,10 @@ function calculate_hanning_spectrograms(y, nffts, noverlaps, offset, fs)
     return Ys
 end
 
-dB = x->20*log10.(power(x))
-overlay(Ys, f) = overlay(f.(Ys))
-function overlay(Ys)
+dB = x->20*log10.(x)
+overlay(Ys::Vector{DSP.Periodograms.Spectrogram}) = overlay(power.(Ys), dB)
+overlay(Ys) = overlay(Ys, identity)
+function overlay(Ys, f)
     ntime, nfreq = size.(Ys,2), size.(Ys,1)
     mintime = minimum(round.(Int, maximum(ntime) ./ ntime) .* ntime)
     minfreq = minimum(round.(Int, maximum(nfreq) ./ nfreq) .* nfreq)
@@ -38,7 +39,7 @@ function overlay(Ys)
                 tdelta = sz[2] - length(t0:scale[2]:mintime)
                 Y_overlay[icolor,
                   f0 : scale[1] : end,
-                  t0 : scale[2] : end] .= @view Yi[1:end-fdelta, 1:end-tdelta]
+                  t0 : scale[2] : end] .= f.(@view Yi[1:end-fdelta, 1:end-tdelta])
             end
         end
     end
