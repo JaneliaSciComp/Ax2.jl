@@ -140,10 +140,10 @@ function refine_ftest(_Fs, minpix1, pval, anyall, sigonly,
     for j in axes(F_overlay,2)
         Threads.@threads for k in axes(F_overlay,3)
             if anyall(x->x<pval, view(F_overlay,1:3,j,k))
-                F_overlay[:,j,k] .= 1
+                F_overlay[:,j,k] .= 1   # fuchsia
                 F_overlay[2,j,k] = 0
             elseif sigonly
-                F_overlay[:,j,k] .= 0
+                F_overlay[:,j,k] .= 0   # black
                 F_overlay[4,j,k] = 1
             end
         end

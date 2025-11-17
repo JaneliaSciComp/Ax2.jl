@@ -23,7 +23,7 @@ Install Julia with [juliup](https://github.com/JuliaLang/juliaup) and then in Ju
 ```julia
 ]add https://github.com/JaneliaSciComp/Ax2
 using Pkg;  Pkg.activate(dirname(dirname(pathof(Ax2))))
-]add add https://github.com/bjarthur/DSP.jl#bja/ftest
+]add https://github.com/bjarthur/DSP.jl#bja/ftest
 ```
 
 Note that Ax2 currently relies on a [pull
