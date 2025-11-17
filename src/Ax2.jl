@@ -91,7 +91,7 @@ function calculate_multitaper_spectrograms(y, nffts, noverlaps, nw, k, fs, iclip
 end
 
 function coalesce_multitaper_power(mts)
-    Y_MTs = []
+    Y_MTs = DSP.Periodograms.Spectrogram[]
     for mt in mts
         p = hcat((power(x) for x in mt)...)
         push!(Y_MTs, DSP.Periodograms.Spectrogram(p, 0:0., 0:0.))
