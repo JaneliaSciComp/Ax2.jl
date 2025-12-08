@@ -23,7 +23,7 @@ function calculate_hanning_spectrograms(y, nffts, noverlaps, offset, fs)
 end
 
 dB = x->20*log10.(x)
-overlay(Ys::Vector{DSP.Periodograms.Spectrogram}) = overlay(power.(Ys), dB)
+overlay(Ys::Vector{<:DSP.Periodograms.Spectrogram}) = overlay(power.(Ys), dB)
 overlay(Ys) = overlay(Ys, identity)
 function overlay(Ys, f)
     ntime, nfreq = size.(Ys,2), size.(Ys,1)
