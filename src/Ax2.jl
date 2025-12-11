@@ -16,7 +16,7 @@ function calculate_hanning_spectrograms(y, nffts, noverlaps, offset, fs)
     Ys = Vector{DSP.Periodograms.Spectrogram}(undef, length(nffts))
     Threads.@threads :greedy for (i,(nfft,noverlap)) in enumerate(zip(nffts,noverlaps))
         Ys[i] = get!(Ys_cache, (hash(y[1+offset:end,1]), nfft,offset,noverlap)) do
-            spectrogram.(Ref(y[1+offset:end,1]), nfft, noverlap; fs=fs, window=hanning)
+            spectrogram(y[1+offset:end,1], nfft, noverlap; fs=fs, window=hanning)
         end
     end
     return Ys
