@@ -5,7 +5,7 @@ using Ax2, GLMakie, DelimitedFiles, Preferences, Colors, FixedPointNumbers, Stat
 include("block-tooltips.jl")
 
 @kwdef struct Widgets
-    fig; me_wav; me_jump; cb_mistakes;
+    fig; gl_tt; gl_fft; gl_morph; gl_pan; gl_zoom; gl_out; gl_spec; me_jump; cb_mistakes;
     cb_power; to_window; tb_nfft; cb_ftest; tb_nwk; tb_minpix1; tb_pval; to_anyall; cb_sigonly;
     cb_morphclose; tb_strelclose; cb_morphopen; tb_strelopen; tb_minpix2;
     isl_freq;
@@ -13,16 +13,18 @@ include("block-tooltips.jl")
     bt_left_big_width; bt_left_small_width; bt_right_small_width; bt_right_big_width;
     sl_time_center; sl_time_width;
     lb_status; bt_play; bt_csv; bt_hdf;
-    ax; hm; hm_pvals; l_hit; l_miss; l_fa; ax1; li1; ax2; li2; ax3; li3;
+    ax; hm; hm_pvals;
+    l_hits; l_misses; l_falsealarms;
+    ax1; li1; ax2; li2; ax3; li3;
 end
 
 @kwdef struct Observables
-    y; fs; hits; misses; false_alarms;
+    y; fs; hits; misses; falsealarms;
     nffts; noverlaps; offset; nw; k; minpix1; pval; strelclose; strelopen; minpix2;
     Ys; Y; Y_freq; Y_time; coarse2fine;
     ifreq; itime; iclip; mtspectrums; Y_MTs; Y_MT; Fs; F;
     alpha_power; alpha_pval; powers; freqs; times; freqs_mt; times_mt; pvals; cr;
-    obs_hit; obs_miss; obs_fa;
+    obs_hits; obs_misses; obs_falsealarms;
     iclip_subsampled; y_clip; times_yclip;
     cumpowers1; cumpowers1_freqs; cumpowers2; times_cumpowers2;
 end
@@ -36,7 +38,6 @@ pref_defaults = (;
     isl_freq = missing,
     sl_time_center = 0,
     sl_time_width = missing,
-    me_wav = missing,
     me_jump = "time",
     cb_mistakes = true,
     cb_tooltips = false,
@@ -63,7 +64,6 @@ function init()
     isl_freq_pref = ismissing(_isl_freq_pref) ? _isl_freq_pref : eval(Meta.parse(_isl_freq_pref))
     sl_time_center_pref = @load_preference("sl_time_center", pref_defaults.sl_time_center)
     sl_time_width_pref = @load_preference("sl_time_width", pref_defaults.sl_time_width)
-    me_wav_pref = @load_preference("me_wav", pref_defaults.me_wav)
     me_jump_pref = @load_preference("me_jump", pref_defaults.me_jump)
     cb_mistakes_pref = @load_preference("cb_mistakes", pref_defaults.cb_mistakes)
     cb_tooltips_pref = @load_preference("cb_tooltips", pref_defaults.cb_tooltips)
@@ -84,28 +84,29 @@ function init()
 
     fig = Figure(size=figsize_pref)
 
-    me_wav = Menu(fig[1,1:3], options=wavfiles, default=coalesce(me_wav_pref, wavfiles[1]))
-
-    y_fs_ = @lift load_recording(joinpath(datapath, $(me_wav.selection)))
-    y = @lift $(y_fs_)[1]
-    fs = @lift Float64($(y_fs_)[2])
-
-    hits = @lift begin
-        fn = joinpath(datapath, string(splitext($(me_wav.selection))[1], "-partial-hits.csv"))
-        isfile(fn) ? readdlm(fn, ',', header=true)[1] : missing
+    y, fs = load_recording(joinpath(datapath, wavfiles[1]))
+    for wavfile in wavfiles[2:end]
+        _y, _fs = load_recording(joinpath(datapath, wavfile))
+        y = hcat(y, _y)
+        @assert fs == _fs
     end
 
-    misses = @lift begin
-        fn = joinpath(datapath, string(splitext($(me_wav.selection))[1], "-complete-misses.csv"))
-        isfile(fn) ? readdlm(fn, ',', header=true)[1] : missing
-    end
+    hits, misses, falsealarms = [], [], []
+    for wavfile in wavfiles
+        fn = joinpath(datapath, string(splitext(wavfile)[1], "-partial-hits.csv"))
+        push!(hits, isfile(fn) ? readdlm(fn, ',', header=true)[1] : missing)
 
-    false_alarms = @lift begin
-        fn = joinpath(datapath, string(splitext($(me_wav.selection))[1], "-complete-false-alarms.csv"))
-        isfile(fn) ? readdlm(fn, ',', header=true)[1] : missing
-    end
+        fn = joinpath(datapath, string(splitext(wavfile)[1], "-complete-misses.csv"))
+        push!(misses, isfile(fn) ? readdlm(fn, ',', header=true)[1] : missing)
 
-    gl_tt = GridLayout(fig[2,3])
+        fn = joinpath(datapath, string(splitext(wavfile)[1], "-complete-false-alarms.csv"))
+        push!(falsealarms, isfile(fn) ? readdlm(fn, ',', header=true)[1] : missing)
+    end
+    hits_all = all(ismissing, hits) ? missing : hcat(skipmissing(hits)...)
+    misses_all = all(ismissing, misses) ? missing : hcat(skipmissing(misses)...)
+    falsealarms_all = all(ismissing, falsealarms) ? missing : hcat(skipmissing(falsealarms)...)
+
+    gl_tt = GridLayout(fig[1,3])
     Label(gl_tt[1,1, Bottom()], "tooltips", tellheight=false, tellwidth=false)
     cb_tooltips = Checkbox(gl_tt[2,1, Top()], checked = cb_tooltips_pref,
                            tellheight=false, tellwidth=false)
@@ -164,35 +165,35 @@ function init()
     strelopen = @lift make_strel(tuple(parse.(Int, split($(tb_strelopen.stored_string), 'x'))...))
     minpix2 = @lift parse(Int, $(tb_minpix2.stored_string))
 
-    Ys = @lift calculate_hanning_spectrograms($y, $nffts, $noverlaps, $offset, $fs)
+    Ys = @lift calculate_hanning_spectrograms($y, $nffts, $noverlaps, fs, $offset)
     Y = @lift overlay($Ys)
 
-    Y_freq = @lift freq($Ys[argmax($nffts)])
-    Y_time = @lift time($Ys[argmin($nffts)])
-    coarse2fine = @lift div(length($Y_time), length(time($Ys[argmax($nffts)])))
+    Y_freq = @lift freq($Ys[argmax($nffts),1])
+    Y_time = @lift time($Ys[argmin($nffts),1])
+    coarse2fine = @lift div(length($Y_time), length(time($Ys[argmax($nffts),1])))
 
-    isl_freq = IntervalSlider(fig[3,1], range=0:0.01:1, horizontal=false,
+    isl_freq = IntervalSlider(fig[2,1], range=0:0.01:1, horizontal=false,
                               startvalues = coalesce(isl_freq_pref, tuple(0, 1)))
-    gl_pan = GridLayout(fig[4,3:5], halign=:left)
+    gl_pan = GridLayout(fig[3,3:5], halign=:left)
     bt_left_big_center = Button(gl_pan[1,1], label="<<")
     bt_left_small_center = Button(gl_pan[1,2], label="<")
     bt_right_small_center = Button(gl_pan[1,3], label=">")
     bt_right_big_center = Button(gl_pan[1,4], label=">>")
-    Label(fig[4,2, Left()], "center")
-    step = (nffts[][1]-noverlaps[][1]) / length(y[])
-    sl_time_center = Slider(fig[4,2], range=0:step:1, startvalue=sl_time_center_pref)
+    Label(fig[3,2, Left()], "center")
+    step = (nffts[][1]-noverlaps[][1]) / size(y,1)
+    sl_time_center = Slider(fig[3,2], range=0:step:1, startvalue=sl_time_center_pref)
 
     me_jump = Menu(gl_pan[1,5], options = ["time", "hits", "misses", "FAs"],
                    default=me_jump_pref, width=70)
 
-    gl_zoom = GridLayout(fig[5,3:5], halign=:left)
+    gl_zoom = GridLayout(fig[4,3:5], halign=:left)
     bt_left_big_width = Button(gl_zoom[1,1], label="<<")
     bt_left_small_width = Button(gl_zoom[1,2], label="<")
     bt_right_small_width = Button(gl_zoom[1,3], label=">")
     bt_right_big_width = Button(gl_zoom[1,4], label=">>")
-    Label(fig[5,2, Left()], "width")
-    maxvalue = max_width_sec * fs[] / length(y[])
-    sl_time_width = Slider(fig[5,2], range=0:step:maxvalue,
+    Label(fig[4,2, Left()], "width")
+    maxvalue = max_width_sec * fs / size(y,1)
+    sl_time_width = Slider(fig[4,2], range=0:step:maxvalue,
                            startvalue = coalesce(sl_time_width_pref, maxvalue))
 
     Label(gl_zoom[1,5, Right()], "show hits &\nmistakes")
@@ -200,23 +201,23 @@ function init()
 
     function jump(data, fun1, fun2, skip)
         t = mean(Y_time[][itime[][[1,end]]])
-        i = fun2(x -> fun1(x, t), data[][:,1])
+        i = fun2(x -> fun1(x, t), data[:,1])
         isnothing(i) && return
-        i = clamp(i+skip, 1, size(data[],1))
-        data[][i,1] * fs[] / length(y[])
+        i = clamp(i+skip, 1, size(data,1))
+        data[i,1] * fs / size(y,1)
     end
 
     on(bt_left_big_center.clicks) do _
         if me_jump.selection[]=="time"
             set_close_to!(sl_time_center, sl_time_center.value[] - sl_time_width.value[] / 2)
         elseif me_jump.selection[]=="hits"
-            c = jump(hits, <, findlast, -9)
+            c = jump(hits_all, <, findlast, -9)
             isnothing(c) || set_close_to!(sl_time_center, c)
         elseif me_jump.selection[]=="misses"
-            c = jump(misses, <, findlast, -9)
+            c = jump(misses_all, <, findlast, -9)
             isnothing(c) || set_close_to!(sl_time_center, c)
         elseif me_jump.selection[]=="FAs"
-            c = jump(false_alarms, <, findlast, -9)
+            c = jump(falsealarm_alls, <, findlast, -9)
             isnothing(c) || set_close_to!(sl_time_center, c)
         end
     end
@@ -224,13 +225,13 @@ function init()
         if me_jump.selection[]=="time"
             set_close_to!(sl_time_center, sl_time_center.value[] - sl_time_width.value[] / 10)
         elseif me_jump.selection[]=="hits"
-            c = jump(hits, <, findlast, 0)
+            c = jump(hits_all, <, findlast, 0)
             isnothing(c) || set_close_to!(sl_time_center, c)
         elseif me_jump.selection[]=="misses"
-            c = jump(misses, <, findlast, 0)
+            c = jump(misses_all, <, findlast, 0)
             isnothing(c) || set_close_to!(sl_time_center, c)
         elseif me_jump.selection[]=="FAs"
-            c = jump(false_alarms, <, findlast, 0)
+            c = jump(falsealarms_all, <, findlast, 0)
             isnothing(c) || set_close_to!(sl_time_center, c)
         end
     end
@@ -238,13 +239,13 @@ function init()
         if me_jump.selection[]=="time"
             set_close_to!(sl_time_center, sl_time_center.value[] + sl_time_width.value[] / 10)
         elseif me_jump.selection[]=="hits"
-            c = jump(hits, >, findfirst, 1)
+            c = jump(hits_all, >, findfirst, 1)
             isnothing(c) || set_close_to!(sl_time_center, c)
         elseif me_jump.selection[]=="misses"
-            c = jump(misses, >, findfirst, 1)
+            c = jump(misses_all, >, findfirst, 1)
             isnothing(c) || set_close_to!(sl_time_center, c)
         elseif me_jump.selection[]=="FAs"
-            c = jump(false_alarms, >, findfirst, 1)
+            c = jump(falsealarms_all, >, findfirst, 1)
             isnothing(c) || set_close_to!(sl_time_center, c)
         end
     end
@@ -252,13 +253,13 @@ function init()
         if me_jump.selection[]=="time"
             set_close_to!(sl_time_center, sl_time_center.value[] + sl_time_width.value[] / 2)
         elseif me_jump.selection[]=="hits"
-            c = jump(hits, >, findfirst, 10)
+            c = jump(hits_all, >, findfirst, 10)
             isnothing(c) || set_close_to!(sl_time_center, c)
         elseif me_jump.selection[]=="misses"
-            c = jump(misses, >, findfirst, 10)
+            c = jump(misses_all, >, findfirst, 10)
             isnothing(c) || set_close_to!(sl_time_center, c)
         elseif me_jump.selection[]=="FAs"
-            c = jump(false_alarms, >, findfirst, 10)
+            c = jump(falsealarms_all, >, findfirst, 10)
             isnothing(c) || set_close_to!(sl_time_center, c)
         end
     end
@@ -272,12 +273,12 @@ function init()
     on(_->set_close_to!(sl_time_width, sl_time_width.value[]*1.5),
        bt_right_big_width.clicks)
 
-    lb_status = Label(fig[7,1:4], " ")
+    lb_status = Label(fig[6,1:4], " ")
 
-    gl_out = GridLayout(fig[6,3:5], tellheight=false)
+    gl_out = GridLayout(fig[5,3:5], tellheight=false)
 
     bt_play = Button(gl_out[1,1], label="play")
-    on(_->play(y[], iclip[], fs[]), bt_play.clicks)
+    on(_->play(y, iclip[], fs), bt_play.clicks)  ### !!!
 
     bt_csv = Button(gl_out[1,2], label="CSV")
     on(bt_csv.clicks) do _
@@ -285,9 +286,9 @@ function init()
             lb_status.text[] = "F-test and sig. only must both be checked to output CSV"
             return
         end
-        filename = joinpath(datapath, string(me_wav.selection[], '-', iclip[][1], '-', iclip[][2], ".csv"))
-        save_csv(filename, F[], Y_freq[], ifreq[], Y_time[], itime[])
-        lb_status.text[] = "CSV saved to $filename"
+        fn = joinpath(datapath, string(replace(wavfiles[1], "ch1"=>""), '-', iclip[][1], '-', iclip[][2], ".csv"))
+        save_csv(fn, F[], Y_freq[], ifreq[], Y_time[], itime[])
+        lb_status.text[] = "CSV saved to $fn"
     end
 
     bt_hdf = Button(gl_out[1,3], label="HDF")
@@ -296,9 +297,9 @@ function init()
             lb_status.text[] = "F-test and sig. only must both be checked to output HDF"
             return
         end
-        filename = joinpath(datapath, string(me_wav.selection[], '-', iclip[][1], '-', iclip[][2], ".hdf"))
-        save_hdf(filename, F[], Y_freq[], ifreq[], Y_time[], itime[])
-        lb_status.text[] = "HDF saved to $filename"
+        fn = joinpath(datapath, string(replace(wavfiles[1], "ch1"=>""), '-', iclip[][1], '-', iclip[][2], ".hdf"))
+        save_hdf(fn, F[], Y_freq[], ifreq[], Y_time[], itime[])
+        lb_status.text[] = "HDF saved to $fn"
     end
 
     # indices into Y
@@ -319,15 +320,15 @@ function init()
 
     # indices into y
     iclip = @lift begin
-        (round(Int, Y_time[][$itime[1]]*fs[] - minimum(noverlaps[]) + 1 + $offset),
-         round(Int, Y_time[][$itime[end]]*fs[] + minimum(noverlaps[]) + $offset))
+        (round(Int, Y_time[][$itime[1]]*fs - minimum(noverlaps[]) + 1 + $offset),
+         round(Int, Y_time[][$itime[end]]*fs + minimum(noverlaps[]) + $offset))
     end
 
     mtspectrums = @lift begin
         if !$(to_window.active) || $(cb_ftest.checked)
-            calculate_multitaper_spectrograms($y, $nffts, $noverlaps, $nw, $k, $fs, $iclip)
+            calculate_multitaper_spectrograms($y, $nffts, $noverlaps, $nw, $k, fs, $iclip)
         else
-            fill(Vector{Periodograms.PeriodogramF}(undef, 0), 0)
+            fill(Matrix{Periodograms.PeriodogramF}(undef, 0, 0), 0)
         end
     end
 
@@ -335,138 +336,173 @@ function init()
         if !$(to_window.active)
             coalesce_multitaper_power($mtspectrums)
         else
-            fill(Periodograms.Spectrogram(Matrix{Float64}(undef, 0, 0), 0:0., 0:0.), 0)
+            fill(Periodograms.Spectrogram(Matrix{Float64}(undef, 0, 0), 0:0., 0:0.), 0, 0)
         end
     end
-    Y_MT = @lift $(to_window.active) ? Array{Float32}(undef, 0, 0, 0) : overlay($Y_MTs)
+    Y_MT = @lift $(to_window.active) ? Array{Float32}(undef, 0, 0, 0, 0) : overlay($Y_MTs)
 
     Fs = @lift begin
         if $(cb_ftest.checked)
             coalesce_multitaper_ftest($mtspectrums)
         else
-            fill(Matrix{Float64}(undef, 0, 0), 0)
+            fill(Matrix{Float64}(undef, 0, 0), 0, 0)
         end
     end
     F = @lift begin
         if $(cb_ftest.checked)
             anyall = $(to_anyall.active) ? all : any
             refine_ftest($Fs, $minpix1, $pval, anyall, $(cb_sigonly.checked),
-                           $(cb_morphclose.checked), $strelclose,
-                           $(cb_morphopen.checked), $strelopen,
-                           $minpix2)
+                         $(cb_morphclose.checked), $strelclose,
+                         $(cb_morphopen.checked), $strelopen,
+                         $minpix2)
         else
-            Matrix{RGBA{N0f8}}(undef, 0, 0)
+            Array{RGBA{N0f8}}(undef, 0, 0, 0)
         end
     end
 
     alpha_power = @lift $(cb_power.checked) * 0.5 + !$(cb_ftest.checked) * 0.5
     alpha_pval = @lift $(cb_ftest.checked) * 0.5 + !$(cb_power.checked) * 0.5
 
-    powers = @lift begin
-        if $(to_window.active)
-            all(in.(extrema($itime), Ref(axes($Y,3)))) || return RGBA{N0f8}[1 0; 0 0]
-            all(in.(extrema($ifreq), Ref(axes($Y,2)))) || return RGBA{N0f8}[1 0; 0 0]
-            Y_scratch = $Y[:,$ifreq,$itime]
-        else
-            all(in.(extrema($ifreq), Ref(axes($Y_MT,2)))) || return RGBA{N0f8}[1 0; 0 0]
-            Y_scratch = $Y_MT[:, $ifreq, 1:$itime.step:end]
+    powers = Vector{Observable}(undef, size(y,2))
+    for imic in axes(y,2)
+        powers[imic] = lift(to_window.active, itime, ifreq, Y, Y_MT) do to_window, itime, ifreq, Y, Y_MT
+            if to_window
+                all(in.(extrema(itime), Ref(axes(Y,3)))) || return RGBA{N0f8}[1 0; 0 0]
+                all(in.(extrema(ifreq), Ref(axes(Y,2)))) || return RGBA{N0f8}[1 0; 0 0]
+                Y_scratch = Y[:,ifreq,itime,imic]
+            else
+                all(in.(extrema(ifreq), Ref(axes(Y_MT,2)))) || return RGBA{N0f8}[1 0; 0 0]
+                Y_scratch = Y_MT[:, ifreq, 1:itime.step:end, imic]
+            end
+            scale_and_color(Y_scratch)
         end
-        scale_and_color(Y_scratch)
     end
 
     freqs = @lift tuple($Y_freq[$ifreq[[1,end]]] ./ hz2khz...)
     times = @lift tuple($Y_time[$itime[[1,end]]]...)
-    ax,hm = image(fig[3,2], times, freqs, powers;
-                  interpolate=false, alpha=alpha_power, visible=cb_power.checked,
-                  inspector_label = (pl,i,pos)->string(
-                          "time = ", pos[1], " sec\n",
-                          "freq = ", pos[2], " kHz\n",
-                          "power = ", red(pos[3]).i+0, ',', green(pos[3]).i+0, ',', blue(pos[3]).i+0))
+    ax, hm = [], []
+    gl_spec = GridLayout(fig[2,2])
+    for imic in axes(y,2)
+        _ax,_hm = image(gl_spec[mic2fig[imic]...], times, freqs, powers[imic];
+                        interpolate=false, alpha=alpha_power, visible=cb_power.checked,
+                        inspector_label = (_,_,pos)->string(
+                                "time = ", pos[1], " sec\n",
+                                "freq = ", pos[2], " kHz\n",
+                                "power = ", red(pos[3]).i+0, ',', green(pos[3]).i+0, ',', blue(pos[3]).i+0))
 
-    ax.xlabel[] = "time (s)"
-    ax.ylabel[] = "frequency (kHz)"
-    onany(freqs, times) do f,t
-        limits!(ax, t..., f...)
+        _ax.title[] = "mic $imic"
+        _ax.xlabel[] = "time (s)"
+        _ax.ylabel[] = "frequency (kHz)"
+        _ax.xgridvisible[] = _ax.ygridvisible[] = false
+        onany(freqs, times) do f,t
+            limits!(_ax, t..., f...)
+        end
+        push!(ax, _ax)
+        push!(hm, _hm)
     end
 
-    pvals = @lift begin
-        if $(cb_ftest.checked)
-            all(in.(extrema($ifreq), Ref(axes($F,1)))) || return RGBA{N0f8}[1 0; 0 0]
-            $F'[1:$itime.step:end, $ifreq]
-        else
-            Matrix{RGBA{N0f8}}(undef, 1, 1)
+    pvals = Dict{Int,Observable}()
+    for imic in axes(y,2)
+        pvals[imic] = lift(cb_ftest.checked, itime, ifreq, F) do cb_ftest, itime, ifreq, F
+            if cb_ftest
+                all(in.(extrema(ifreq), Ref(axes(F,1)))) || return RGBA{N0f8}[1 0; 0 0]
+                collect(F[ifreq, 1:itime.step:end, imic]')
+            else
+                Matrix{RGBA{N0f8}}(undef, 1, 1)
+            end
         end
     end
     freqs_mt = @lift $(cb_ftest.checked) ? $freqs : tuple(0.,0.)
-    times_mt = @lift $(cb_ftest.checked) ? tuple($Y_time[$itime[[1,size($pvals,1)]]]...) : tuple(0.,0.)
+    times_mt = @lift $(cb_ftest.checked) ? tuple($Y_time[$itime[[1,size($(pvals[1]),1)]]]...) : tuple(0.,0.)
     cr = @lift ($pval,1)
-    hm_pvals = image!(times_mt, freqs_mt, pvals;
-                      interpolate=false,
-                      colormap=:grays, colorrange=cr, lowclip=(:fuchsia, 1),
-                      alpha=alpha_pval,
-                      visible=cb_ftest.checked,
-                      inspector_label = (pl,i,pos)->string(
-                              "time = ", pos[1], " sec\n",
-                              "freq = ", pos[2], " kHz\n",
-                              "power = ", red(pos[3]).i+0, ',', green(pos[3]).i+0, ',', blue(pos[3]).i+0))
+    hm_pvals = []
+    for imic in axes(y,2)
+        push!(hm_pvals, image!(ax[imic], times_mt, freqs_mt, pvals[imic];
+                               interpolate=false,
+                               colormap=:grays, colorrange=cr, lowclip=(:fuchsia, 1),
+                               alpha=alpha_pval,
+                               visible=cb_ftest.checked,
+                               inspector_label = (_,_,pos)->string(
+                                       "time = ", pos[1], " sec\n",
+                                       "freq = ", pos[2], " kHz\n",
+                                       "power = ", red(pos[3]).i+0, ',', green(pos[3]).i+0, ',', blue(pos[3]).i+0)))
+    end
 
-    obs_hit = @lift ismissing($hits) || isempty($hits) ? Point2f[(0, 0)] :
-            [Rect(r[1], r[3]./hz2khz, r[2]-r[1], (r[4]-r[3])./hz2khz) for r in eachrow($hits)]
-    l_hit = poly!(obs_hit, color = :transparent, strokecolor = Cycled(2), strokewidth=1,
-                  visible=cb_mistakes.checked)
-    obs_miss = @lift ismissing($misses) || isempty($misses) ? Point2f[(0, 0)] :
-            [Rect(r[1], r[3]./hz2khz, r[2]-r[1], (r[4]-r[3])./hz2khz) for r in eachrow($misses)]
-    l_miss = poly!(obs_miss, color = :transparent, strokecolor = Cycled(3), strokewidth=1,
-                   visible=cb_mistakes.checked)
-    obs_fa = @lift ismissing($false_alarms) || isempty($false_alarms) ? Point2f[(0, 0)] :
-            [Rect(r[1], r[3]./hz2khz, r[2]-r[1], (r[4]-r[3])./hz2khz) for r in eachrow($false_alarms)]
-    l_fa = poly!(obs_fa, color = :transparent, strokecolor = Cycled(4), strokewidth=1,
-                 visible=cb_mistakes.checked)
+    obs_hits, obs_misses, obs_falsealarms = [], [], []
+    l_hits, l_misses, l_falsealarms = [], [], []
+    for imic in axes(y,2)
+        _obs_hit = ismissing(hits[imic]) || isempty(hits[imic]) ? Point2f[(0, 0)] :
+                [Rect(r[1], r[3]./hz2khz, r[2]-r[1], (r[4]-r[3])./hz2khz)
+                 for r in eachrow(hits[imic])]
+        _l_hit = poly!(_obs_hit, color = :transparent, strokecolor = Cycled(2), strokewidth=1,
+                       visible=cb_mistakes.checked)
+        _obs_miss = ismissing(misses[imic]) || isempty(misses[imic]) ? Point2f[(0, 0)] :
+                [Rect(r[1], r[3]./hz2khz, r[2]-r[1], (r[4]-r[3])./hz2khz)
+                 for r in eachrow(misses[imic])]
+        _l_miss = poly!(_obs_miss, color = :transparent, strokecolor = Cycled(3), strokewidth=1,
+                        visible=cb_mistakes.checked)
+        _obs_falsealarms = ismissing(falsealarms[imic]) || isempty(falsealarms[imic]) ?
+                Point2f[(0, 0)] :
+                [Rect(r[1], r[3]./hz2khz, r[2]-r[1], (r[4]-r[3])./hz2khz)
+                 for r in eachrow(falsealarms[imic])]
+        _l_falsealarm = poly!(_obs_falsealarms, color = :transparent, strokecolor = Cycled(4),
+                              strokewidth=1, visible=cb_mistakes.checked)
+        push!(obs_hits, _obs_hit);  push!(l_hits, _l_hit)
+        push!(obs_misses, _obs_miss);  push!(l_misses, _l_miss)
+        push!(obs_falsealarms, _obs_falsealarms);  push!(l_falsealarms, _l_falsealarm)
+    end
 
     iclip_subsampled = @lift $iclip[1] : max(1, fld($iclip[2]-$iclip[1], display_size[2])) : $iclip[2]
-    y_clip = @lift view(y[], $iclip_subsampled)
-    times_yclip = @lift Point2.(zip($iclip_subsampled ./ $fs, $y_clip))
+    y_clips = []
+    y_clip = @lift view(y, $iclip_subsampled)
+    times_yclip = @lift Point2.(zip($iclip_subsampled ./ fs, $y_clip))
 
-    ax1, li1 = lines(fig[6,2], times_yclip,
+    ax1, li1 = lines(fig[5,2], times_yclip,
                      inspector_label = (pl,i,pos)->string("time = ", pos[1], " sec\n",
                                                           "amplitude = ", pos[2], " V"))
-    ax1.xticklabelsvisible[] = ax1.yticklabelsvisible[] = false
+    ax1.yticklabelsvisible[] = false
+    ax1.xlabel[] = "time (s)"
     ax1.ylabel[] = "amplitude"
     onany((yc,ics,fs)->limits!(ax1, ics[1]/fs, ics[end]/fs, extrema(yc)...),
           y_clip, iclip_subsampled, fs)
 
-    cumpowers1 = @lift cumpower($powers, 1)
-    cumpowers1_freqs = @lift Point2.(zip($cumpowers1, $Y_freq[$ifreq]))
+    cumpowers1 = @lift begin
+        powers_tuple = tuple((x[] for x in powers[1:end-1])...)
+        cumpower(1, $(powers[end]), powers_tuple...)
+    end
+    cumpowers1_freqs = @lift Point2.(zip($cumpowers1, $Y_freq[$ifreq] ./ hz2khz))
 
-    ax2, li2 = lines(fig[3,3], cumpowers1_freqs,
+    ax2, li2 = lines(fig[2,3], cumpowers1_freqs,
                      inspector_label = (pl,i,pos)->string("freq = ", pos[2], " kHz\n",
                                                           "power = ", pos[1], " dB"))
-    ax2.xticklabelsvisible[] = ax2.yticklabelsvisible[] = false
+    ax2.xticklabelsvisible[] = false
+    ax2.ylabel[] = "frequency (kHz)"
     ax2.xlabel[] = "power"
-    onany((cp,Yf,i)->limits!(ax2, extrema(cp)..., Yf[i[1]], Yf[i[end]]),
+    onany((cp,Yf,i)->limits!(ax2, extrema(cp)..., (Yf[i[[1,end]]] ./ hz2khz)...),
           cumpowers1, Y_freq, ifreq)
 
-    cumpowers2 = @lift cumpower($powers, 2)
+    cumpowers2 = @lift begin
+        powers_tuple = tuple((x[] for x in powers[1:end-1])...)
+        cumpower(2, $(powers[end]), powers_tuple...)
+    end
     times_cumpowers2 = @lift Point2.(zip($Y_time[$itime], $cumpowers2))
 
-    ax3, li3 = lines(fig[2,2], times_cumpowers2,
+    ax3, li3 = lines(fig[1,2], times_cumpowers2,
                      inspector_label = (pl,i,pos)->string("time = ", pos[1], " sec\n",
                                                           "power = ", pos[2], " dB"))
-    ax3.xticklabelsvisible[] = ax3.yticklabelsvisible[] = false
+    ax3.yticklabelsvisible[] = false
+    ax3.xlabel[] = "time (s)"
     ax3.ylabel[] = "power"
     onany((cp,Yt,i)->limits!(ax3, Yt[i[1]], Yt[i[end]], extrema(cp)...),
           cumpowers2, Y_time, itime)
 
-    y.ignore_equal_values = true
     Ys.ignore_equal_values = true
     nffts.ignore_equal_values = true
     noverlaps.ignore_equal_values = true
     offset.ignore_equal_values = true
     nw.ignore_equal_values = true
     k.ignore_equal_values = true
-    fs.ignore_equal_values = true
     iclip.ignore_equal_values = true
-    powers.ignore_equal_values = true
     itime.ignore_equal_values = true
     ifreq.ignore_equal_values = true
     Y_freq.ignore_equal_values = true
@@ -478,14 +514,9 @@ function init()
     mtspectrums.ignore_equal_values = true
     Fs.ignore_equal_values = true
 
-    colsize!(fig.layout, 2, Auto(8))
-    colsize!(fig.layout, 3, Auto(1))
-    rowsize!(fig.layout, 2, Auto(1))
-    rowsize!(fig.layout, 3, Auto(4))
-    rowsize!(fig.layout, 6, Auto(1))
-
-    tooltip!(me_wav, "choose a recording",
-             placement = :left, enabled = cb_tooltips.checked)
+    rowsize!(fig.layout, 1, Relative(0.1))
+    rowsize!(fig.layout, 5, Relative(0.1))
+    colsize!(fig.layout, 3, Relative(0.1))
 
     tooltip!(cb_power, "calculate and display the spectrogram",
              placement = :left, enabled = cb_tooltips.checked)
@@ -572,7 +603,6 @@ function init()
     on(x->@set_preferences!("isl_freq"=>string(x)), isl_freq.interval)
     on(x->@set_preferences!("sl_time_center"=>x), sl_time_center.value)
     on(x->@set_preferences!("sl_time_width"=>x), sl_time_width.value)
-    on(x->@set_preferences!("me_wav"=>x), me_wav.selection)
     on(x->@set_preferences!("me_jump"=>x), me_jump.selection)
     on(x->@set_preferences!("cb_mistakes"=>x), cb_mistakes.checked)
     on(x->@set_preferences!("cb_tooltips"=>x), cb_tooltips.checked)
@@ -592,7 +622,7 @@ function init()
     on(x->@set_preferences!("tb_minpix2"=>x), tb_minpix2.stored_string)
 
     widgets = Widgets(
-        fig, me_wav, me_jump, cb_mistakes,
+        fig, gl_tt, gl_fft, gl_morph, gl_pan, gl_zoom, gl_out, gl_spec, me_jump, cb_mistakes,
         cb_power, to_window, tb_nfft, cb_ftest, tb_nwk, tb_minpix1, tb_pval, to_anyall, cb_sigonly,
         cb_morphclose, tb_strelclose, cb_morphopen, tb_strelopen, tb_minpix2,
         isl_freq,
@@ -600,16 +630,18 @@ function init()
         bt_left_big_width, bt_left_small_width, bt_right_small_width, bt_right_big_width,
         sl_time_center, sl_time_width,
         lb_status, bt_play, bt_csv, bt_hdf,
-        ax, hm, hm_pvals, l_hit, l_miss, l_fa, ax1, li1, ax2, li2, ax3, li3
+        ax, hm, hm_pvals,
+        l_hits, l_misses, l_falsealarms,
+        ax1, li1, ax2, li2, ax3, li3
         )
 
     observables = Observables(
-        y, fs, hits, misses, false_alarms,
+        y, fs, hits, misses, falsealarms,
         nffts, noverlaps, offset, nw, k, minpix1, pval, strelclose, strelopen, minpix2,
         Ys, Y, Y_freq, Y_time, coarse2fine,
         ifreq, itime, iclip, mtspectrums, Y_MTs, Y_MT, Fs, F,
         alpha_power, alpha_pval, powers, freqs, times, freqs_mt, times_mt, pvals, cr,
-        obs_hit, obs_miss, obs_fa,
+        obs_hits, obs_misses, obs_falsealarms,
         iclip_subsampled, y_clip, times_yclip,
         cumpowers1, cumpowers1_freqs, cumpowers2, times_cumpowers2,
         )
@@ -617,10 +649,17 @@ function init()
     return widgets, observables
 end
 
-function Ax2.app(_datapath)
-    global datapath, wavfiles
-    datapath = _datapath
-    wavfiles = filter(endswith(".wav"), readdir(_datapath))
+"""
+`datapath_wavregex` is the full path to the wav files using a regular
+expression for the filenames.  `_mic2fig` is a vector of 2-vectors specifying
+where to position the spectrograms for each mic.
+"""
+function Ax2.app(datapath_wavregex, _mic2fig)
+    global datapath, wavfiles, mic2fig
+    datapath = dirname(datapath_wavregex)
+    wavfiles = filter(contains(Regex(basename(datapath_wavregex))),
+                      readdir(dirname(datapath_wavregex)))
+    mic2fig = _mic2fig
 
     widgets, observables = init()
     notify(observables.freqs)
