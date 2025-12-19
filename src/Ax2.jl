@@ -10,7 +10,7 @@ fs_play = 48_000
 
 load_recording(wavfile) = wavread(wavfile)
 
-Ys_cache = LRU{Tuple{UInt64,Int,Int,Int},DSP.Periodograms.Spectrogram}(maxsize=10)
+const Ys_cache = LRU{Tuple{UInt64,Int,Int,Int},DSP.Periodograms.Spectrogram}(maxsize=10)
 
 """
     calculate_hanning_spectrograms(y, nffts, noverlaps, fs, offset)
@@ -65,7 +65,7 @@ function overlay(Ys, fun)
     return Y_overlay
 end
 
-configs = Dict{Int64,Channel{MTConfig{Float64}}}()
+const configs = Dict{Int64,Channel{MTConfig{Float64}}}()
 
 function precompute_config(nfft, nw, k, fs)
     configs[nfft] = Channel{MTConfig{Float64}}(Threads.nthreads())
@@ -75,7 +75,7 @@ function precompute_config(nfft, nw, k, fs)
 end
 
 """
-    calculate_multitaper_spectrograms(y, nffts, noverlaps, nw, k, fs, iclip, output=stderr)
+    calculate_multitaper_spectrograms(y, nffts, noverlaps, nw, k, fs, iclip)
 
 `y` has # time samples rows and # microphones columns.  `nffts` and `noverlaps`
 are vectors of the same length.  `nw` and `k` are the time-bandwidth and number
@@ -85,7 +85,7 @@ time to analyse.
 returned is a vector for each nfft, each element being a matrix of multi-taper
 periodograms with # time slices rows and # mics columns
 """
-function calculate_multitaper_spectrograms(y, nffts, noverlaps, nw, k, fs, iclip, output=stderr)
+function calculate_multitaper_spectrograms(y, nffts, noverlaps, nw, k, fs, iclip)
     function _mt_pgram(idx, imic, nfft, config)
         _y = y[idx:idx+nfft-1, imic]
         _y .-= mean(_y)
@@ -133,7 +133,7 @@ returned is a matrix of multi-taper F-tests with # nffts rows and # mics columns
 function coalesce_multitaper_ftest(mts)
     Fs = Matrix{Matrix{Float64}}(undef, length(mts), size(mts[1],2))
     for infft in 1:length(mts), imic in axes(mts[infft],2)
-        Fs[infft,imic] = hcat((Fpval(x) for x in mts[infft][:,imic])...)
+        Fs[infft,imic] = reduce(hcat, Fpval.(mts[infft][:,imic]))
     end
     return Fs
 end
@@ -142,19 +142,19 @@ make_strel(t) = strel_box(t)
 
 function get_pad(pad, strel, F, val)
     if pad
-        padlo = tuple(-[first.(axes(strel))...]...)
+        padlo = map(a->-first(a), axes(strel))
         padhi = last.(axes(strel))
         F_padded = padarray(view(F,1,:,:), Fill(val, padlo, padhi))
     else
         padlo = padhi = (0,0)
-        F_padded = F[1,:,:]
+        F_padded = ImageCore.OffsetArray(F[1,:,:], 1:size(F,2), 1:size(F,3))
     end
-    return F_padded, [1:1, 1+padlo[1]:size(F,2)+padlo[1], 1+padlo[2]:size(F,3)+padlo[2]]
+    return F_padded, (1:1, 1+padlo[1]:size(F,2)+padlo[1], 1+padlo[2]:size(F,3)+padlo[2])
 end
 
 function refine_ftest(_Fs, minpix1, pval, anyall, sigonly,
                       morphclose, strelclose, morphopen, strelopen,
-                      minpix2, pad=true)
+                      minpix2, pad)
     if sigonly && minpix1>0
         Fs = deepcopy(_Fs)
         Threads.@threads for thisFs in Fs

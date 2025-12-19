@@ -354,7 +354,7 @@ function init()
             refine_ftest($Fs, $minpix1, $pval, anyall, $(cb_sigonly.checked),
                          $(cb_morphclose.checked), $strelclose,
                          $(cb_morphopen.checked), $strelopen,
-                         $minpix2)
+                         $minpix2, true)
         else
             Array{RGBA{N0f8}}(undef, 0, 0, 0)
         end
